@@ -52,6 +52,13 @@ Please follow the standard GitHub workflow outlined below:
 
 ---
 
+### 0️⃣ Find and Claim an Issue
+- Navigate to the [Issues](https://github.com/ErebAsh/club-hub/issues) tab.
+- Look for an issue that interests you and isn't already assigned.
+- Comment `/claim`, `assign me`, or `please assign this to me` to assign it to yourself.
+- **Note**: Claims expire after **14 days** of inactivity.
+- To release an issue, comment `/unclaim` or `unassign me`.
+
 ### 1️⃣ Fork the Repository
 Create your own fork of the repository to work independently.
 

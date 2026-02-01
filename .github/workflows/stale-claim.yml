@@ -1,0 +1,76 @@
+name: Stale Claim Sweeper
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Run every 6 hours
+  workflow_dispatch:      # Allow manual run
+
+permissions:
+  issues: write
+
+jobs:
+  stale-sweeper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unassign Stale Claims
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // Configuration
+            const STALE_DAYS = 14;
+            // Get current time
+            const now = new Date();
+            const staleThreshold = new Date(now.getTime() - (STALE_DAYS * 24 * 60 * 60 * 1000));
+            
+            console.log(`Checking for issues inactive since ${staleThreshold.toISOString()}`);
+
+            // Find issues with 'in-progress' label
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'in-progress'
+            });
+
+            console.log(`Found ${issues.length} 'in-progress' issues.`);
+
+            for (const issue of issues) {
+              const lastUpdate = new Date(issue.updated_at);
+              console.log(`Issue #${issue.number} last updated: ${issue.updated_at}`);
+
+              if (lastUpdate < staleThreshold) {
+                console.log(`Issue #${issue.number} is stale.`);
+                
+                if (issue.assignees.length > 0) {
+                   const users = issue.assignees.map(a => a.login);
+                   
+                   // Remove assignees
+                   await github.rest.issues.removeAssignees({
+                     owner: context.repo.owner,
+                     repo: context.repo.repo,
+                     issue_number: issue.number,
+                     assignees: users
+                   });
+                   
+                   // Remove labels
+                   const labelsToRemove = ['in-progress', 'assigned'];
+                   for (const label of labelsToRemove) {
+                     try {
+                        await github.rest.issues.removeLabel({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: issue.number,
+                          name: label
+                        });
+                     } catch (e) { console.log(`Failed to remove label ${label}`); }
+                   }
+                   
+                   // Comment
+                   await github.rest.issues.createComment({
+                     owner: context.repo.owner,
+                     repo: context.repo.repo,
+                     issue_number: issue.number,
+                     body: `📢 **Claim Expired**\n\nThis issue was claimed by @${users.join(', @')} but has seen no activity for over ${STALE_DAYS} days.\n\nThe claim has been automatically removed to allow others to contribute. If you are still working on this, please feel free to reclaim it!`
+                   });
+                }
+              }
+            }

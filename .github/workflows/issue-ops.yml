@@ -1,0 +1,147 @@
+name: Issue Operations
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  issue-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Claim/Unclaim Commands
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const body = context.payload.comment.body.trim();
+            const issue = context.payload.issue;
+            const user = context.payload.comment.user.login;
+            
+            const lowerBody = body.toLowerCase();
+            const claimPhrases = ['/claim', 'assign me', 'please assign this to me', 'i would like to work on this', 'assign this to me'];
+            const isClaim = claimPhrases.some(phrase => lowerBody.includes(phrase));
+            
+            const unclaimPhrases = ['/unclaim', 'unassign me', 'please unassign me', 'release this issue', 'remove assignment'];
+            const isUnclaim = unclaimPhrases.some(phrase => lowerBody.includes(phrase));
+
+            // Only proceed if it's a command we care about
+            if (!isClaim && !isUnclaim) {
+              return;
+            }
+
+            // Command: Claim
+            if (isClaim) {
+              // Check if already assigned
+              if (issue.assignees.length > 0) {
+                 const assignees = issue.assignees.map(a => a.login).join(', ');
+                 // If the user already assigned themselves, just ignore
+                 if (issue.assignees.some(a => a.login === user)) {
+                    return; 
+                 }
+                 
+                 await github.rest.issues.createComment({
+                   owner: context.repo.owner,
+                   repo: context.repo.repo,
+                   issue_number: issue.number,
+                   body: `@${user} This issue is already claimed by @${assignees}. Please pick another issue or discuss with the current assignee.`
+                 });
+                 return;
+              }
+
+              // Check if linked to a PR (Collision Avoidance: Look for referenced PRs)
+              // This acts as a basic check if someone opened a PR without claiming
+              const timeline = await github.rest.issues.listEventsForTimeline({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                per_page: 100
+              });
+              
+              const hasLinkedPR = timeline.data.some(event => 
+                event.event === 'cross-referenced' && 
+                event.source && 
+                event.source.issue && 
+                event.source.issue.pull_request
+              );
+
+              if (hasLinkedPR) {
+                 await github.rest.issues.createComment({
+                   owner: context.repo.owner,
+                   repo: context.repo.repo,
+                   issue_number: issue.number,
+                   body: `@${user} NOTE: It looks like there is already a Pull Request referencing this issue. Please check the timeline to avoid duplicated work.`
+                 });
+                 // We still allow claiming, but warn.
+              }
+
+              // Assign the user
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                assignees: [user]
+              });
+              
+              // Add 'in-progress' and 'assigned' labels
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['in-progress', 'assigned']
+                });
+              } catch (e) {
+                console.log('Could not add labels.');
+              }
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `@${user} You have successfully claimed this issue! 🚀\n\nPlease submit a Pull Request within **14 days**. If there is no activity, the claim will automatically expire.`
+              });
+            } 
+            
+            // Command: /unclaim
+            else if (body.startsWith('/unclaim')) {
+              const isAssigned = issue.assignees.some(a => a.login === user);
+              if (!isAssigned) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `@${user} You cannot unclaim an issue you are not assigned to.`
+                });
+                return;
+              }
+
+              await github.rest.issues.removeAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                assignees: [user]
+              });
+
+              // Remove text labels
+              const labelsToRemove = ['in-progress', 'assigned'];
+              for (const label of labelsToRemove) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: label
+                  });
+                } catch (e) {
+                   // Label might not exist or already removed
+                }
+              }
+              
+               await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `@${user} You have unclaimed this issue. It is now open for others.`
+              });
+            }
